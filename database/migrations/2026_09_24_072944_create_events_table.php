@@ -10,6 +10,10 @@ return new class extends Migration
 
     public function up(): void
     {
+        if (Schema::connection('clickhouse')->hasTable('events')) {
+            return;
+        }
+
         Schema::connection('clickhouse')->create('events', function (ClickHouseBlueprint $table) {
             $table->unsignedBigInteger('id');
             $table->unsignedInteger('user_id');

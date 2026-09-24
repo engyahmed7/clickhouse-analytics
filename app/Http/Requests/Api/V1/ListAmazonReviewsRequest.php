@@ -19,16 +19,6 @@ class ListAmazonReviewsRequest extends FormRequest
                 'all' => filter_var($this->input('all'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE),
             ]);
         }
-
-        if ($this->has('verified_purchase')) {
-            $this->merge([
-                'verified_purchase' => filter_var(
-                    $this->input('verified_purchase'),
-                    FILTER_VALIDATE_BOOLEAN,
-                    FILTER_NULL_ON_FAILURE
-                ),
-            ]);
-        }
     }
 
     /**
@@ -37,24 +27,9 @@ class ListAmazonReviewsRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'source' => ['sometimes', 'string', Rule::in(['clickhouse', 'mysql'])],
             'all' => ['sometimes', 'boolean'],
             'product_category' => ['sometimes', 'string', 'max:255'],
-            'product_id' => ['sometimes', 'string', 'max:255'],
-            'marketplace' => ['sometimes', 'string', 'max:16'],
-            'star_rating' => ['sometimes', 'integer', 'min:1', 'max:5'],
-            'verified_purchase' => ['sometimes', 'boolean'],
-            'min_helpful_votes' => ['sometimes', 'integer', 'min:0'],
-            'search' => ['sometimes', 'string', 'max:255'],
-            'sort' => ['sometimes', 'string', Rule::in([
-                'review_date',
-                'star_rating',
-                'helpful_votes',
-                'total_votes',
-            ])],
-            'direction' => ['sometimes', 'string', Rule::in(['asc', 'desc'])],
-            'per_page' => ['sometimes', 'integer', 'min:1', 'max:1000'],
-            'page' => ['sometimes', 'integer', 'min:1'],
-            'limit' => ['sometimes', 'integer', 'min:1', 'max:500000'],
         ];
     }
 }

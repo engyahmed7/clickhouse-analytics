@@ -6,77 +6,54 @@ use Tests\TestCase;
 
 class AmazonReviewApiTest extends TestCase
 {
-    public function test_index_rejects_invalid_star_rating(): void
+    public function test_index_rejects_invalid_source(): void
     {
-        $response = $this->getJson('/api/v1/amazon-reviews?star_rating=9');
+        $response = $this->getJson('/api/v1/amazon-reviews?source=postgres');
 
         $response->assertStatus(422)
-            ->assertJsonValidationErrors(['star_rating']);
+            ->assertJsonValidationErrors(['source']);
     }
 
-    public function test_index_rejects_invalid_sort_column(): void
+    public function test_index_returns_clickhouse_reviews_for_category(): void
     {
-        $response = $this->getJson('/api/v1/amazon-reviews?sort=not_a_column');
-
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors(['sort']);
-    }
-
-    public function test_index_returns_paginated_reviews(): void
-    {
-        $response = $this->getJson('/api/v1/amazon-reviews?per_page=5');
+        $response = $this->getJson(
+            '/api/v1/amazon-reviews?all=1&product_category=Grocery&source=clickhouse'
+        );
 
         $response->assertOk()
             ->assertJsonStructure([
                 'data' => [
                     '*' => [
                         'review_id',
-                        'review_date',
-                        'marketplace',
-                        'product_id',
-                        'product_title',
                         'product_category',
                         'star_rating',
-                        'helpful_votes',
-                        'verified_purchase',
-                        'review_headline',
-                        'review_body',
                     ],
                 ],
-                'links',
-                'meta',
             ]);
 
-        $this->assertLessThanOrEqual(5, count($response->json('data')));
-    }
-
-    public function test_index_returns_all_matching_rows_when_all_flag_is_set(): void
-    {
-        $response = $this->getJson('/api/v1/amazon-reviews?all=1&star_rating=5&limit=25');
-
-        $response->assertOk()
-            ->assertJsonStructure([
-                'data' => [
-                    '*' => [
-                        'review_id',
-                        'star_rating',
-                        'product_category',
-                    ],
-                ],
-            ])
-            ->assertJsonMissingPath('meta.current_page');
-
-        $this->assertLessThanOrEqual(25, count($response->json('data')));
-
         foreach ($response->json('data') as $review) {
-            $this->assertSame(5, (int) $review['star_rating']);
+            $this->assertSame('Grocery', $review['product_category']);
         }
     }
 
-    public function test_show_returns_not_found_for_missing_review(): void
+    public function test_index_returns_mysql_reviews_for_category(): void
     {
-        $response = $this->getJson('/api/v1/amazon-reviews/DOES-NOT-EXIST');
+        $response = $this->getJson(
+            '/api/v1/amazon-reviews?all=1&product_category=Grocery&source=mysql'
+        );
 
-        $response->assertNotFound();
+        $response->assertOk()
+            ->assertJsonStructure([
+                'data' => [
+                    '*' => [
+                        'review_id',
+                        'product_category',
+                    ],
+                ],
+            ]);
+
+        foreach ($response->json('data') as $review) {
+            $this->assertSame('Grocery', $review['product_category']);
+        }
     }
 }

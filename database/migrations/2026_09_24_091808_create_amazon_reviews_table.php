@@ -10,6 +10,10 @@ return new class extends Migration
 
     public function up(): void
     {
+        if (Schema::connection('clickhouse')->hasTable('amazon_reviews')) {
+            return;
+        }
+
         Schema::connection('clickhouse')->create('amazon_reviews', function (ClickHouseBlueprint $table) {
             $table->date('review_date');
             $table->text('marketplace')->lowCardinality();
