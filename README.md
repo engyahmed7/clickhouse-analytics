@@ -178,11 +178,24 @@ php artisan amazon-reviews:sync-mysql --truncate
 
 ## API
 
-Only one endpoint is exposed:
+Only one public JSON endpoint is exposed:
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/v1/amazon-reviews` | Return matching Amazon reviews |
+
+### Admin panel (Filament)
+
+| Area | Database | URL |
+|------|----------|-----|
+| Users (CRUD) | MySQL | `/admin/users` |
+| Amazon Reviews (read-only) | ClickHouse | `/admin/amazon-reviews` |
+
+```bash
+php artisan serve
+# open http://localhost:8000/admin
+# login: admin@example.com / password
+```
 
 ### Query parameters
 
