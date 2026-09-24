@@ -1,59 +1,374 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# ClickHouse Analytics for Laravel
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Laravel application that uses **ClickHouse** as a dedicated analytics store alongside a traditional OLTP database (MySQL, SQLite, etc.). Application data stays on your default connection; event and analytics workloads go through a separate `clickhouse` connection over HTTPS.
 
-## About Laravel
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Table of contents
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- [Features](#features)
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Verify the connection](#verify-the-connection)
+- [Migrations](#migrations)
+- [Usage](#usage)
+- [Partitions](#partitions)
+- [Inspect data in ClickHouse Cloud](#inspect-data-in-clickhouse-cloud)
+- [Documentation](#documentation)
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Features
 
-## Learning Laravel
+- ClickHouse Cloud (HTTPS) and self-hosted ClickHouse support
+- Dedicated `clickhouse` database connection (keeps app DB separate)
+- Eloquent models via `ClickHouse\Laravel\Eloquent\Model`
+- Schema builder with `MergeTree`, `ORDER BY`, and `PARTITION BY`
+- Sample `events` table, model, and migration ready to run
+- Parallel-ready HTTP transport (Guzzle)
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+## Architecture
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+```mermaid
+flowchart LR
+    subgraph App["Laravel Application"]
+        Controllers["Controllers / Models"]
+        Eloquent["Eloquent / Query Builder"]
+    end
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+    subgraph OLTP["Application database"]
+        MySQL[("MySQL / SQLite / PostgreSQL<br/>default connection · DB_*")]
+    end
 
-## Agentic Development
+    subgraph Analytics["Analytics store"]
+        CH[("ClickHouse Cloud<br/>clickhouse connection · CLICKHOUSE_*")]
+    end
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
-
-```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+    Controllers --> Eloquent
+    Eloquent -->|"users, sessions, jobs"| MySQL
+    Eloquent -->|"events, metrics · HTTPS :8443"| CH
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+| Store | Connection | Use for |
+|-------|------------|---------|
+| MySQL / SQLite / PostgreSQL | `default` (`DB_*`) | Users, sessions, jobs, app state |
+| ClickHouse | `clickhouse` (`CLICKHOUSE_*`) | Events, metrics, analytics |
 
-## Contributing
+## Requirements
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+| Dependency | Version |
+|------------|---------|
+| PHP | 8.3+ |
+| Laravel | 13 |
+| Composer | 2.x |
+| ClickHouse | Self-hosted or [ClickHouse Cloud](https://clickhouse.cloud/) |
+| Package | [`laravel-clickhouse/laravel-clickhouse`](https://github.com/laravel-clickhouse/laravel-clickhouse) ^1.4 |
 
-## Code of Conduct
+## Installation
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```bash
+git clone <repository-url>
+cd clickhouse
 
-## Security Vulnerabilities
+composer install
+cp .env.example .env
+php artisan key:generate
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Optional frontend assets:
 
-## License
+```bash
+npm install && npm run build
+```
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
-# clickhouse
+The ClickHouse driver is already listed in `composer.json`. To add it to another project:
+
+```bash
+composer require laravel-clickhouse/laravel-clickhouse
+```
+
+The package auto-discovers — no service provider registration required.
+
+## Configuration
+
+### Environment variables
+
+Copy values from your ClickHouse Cloud **HTTPS** connection dialog (not the MySQL protocol tab).
+
+```env
+# Application database
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=click_house
+DB_USERNAME=root
+DB_PASSWORD=
+
+# ClickHouse (HTTPS interface)
+CLICKHOUSE_HOST=your-service.region.provider.clickhouse.cloud
+CLICKHOUSE_PORT=8443
+CLICKHOUSE_DATABASE=default
+CLICKHOUSE_USERNAME=default
+CLICKHOUSE_PASSWORD=your-password
+CLICKHOUSE_HTTPS=true
+CLICKHOUSE_TRANSPORT=guzzle
+CLICKHOUSE_TIMEOUT=30
+CLICKHOUSE_CONNECT_TIMEOUT=10
+CLICKHOUSE_USE_LIGHTWEIGHT_DELETE=false
+```
+
+| Variable | Description |
+|----------|-------------|
+| `CLICKHOUSE_HOST` | Hostname from the Cloud **HTTPS** dialog |
+| `CLICKHOUSE_PORT` | `8443` (Cloud HTTPS) or `8123` (local HTTP) |
+| `CLICKHOUSE_DATABASE` | Database name (usually `default`) |
+| `CLICKHOUSE_USERNAME` | Native user (usually `default`) |
+| `CLICKHOUSE_PASSWORD` | Service password (shown only at creation — reset if lost) |
+| `CLICKHOUSE_HTTPS` | `true` for TLS / Cloud |
+| `CLICKHOUSE_TRANSPORT` | `guzzle` (default) or `curl` |
+| `CLICKHOUSE_TIMEOUT` | Request timeout in seconds |
+| `CLICKHOUSE_CONNECT_TIMEOUT` | TCP connect timeout in seconds |
+
+### Local vs Cloud
+
+| Setting | Local ClickHouse | ClickHouse Cloud |
+|---------|------------------|------------------|
+| Host | `127.0.0.1` | `*.clickhouse.cloud` |
+| Port | `8123` | `8443` |
+| HTTPS | `false` | `true` |
+| Username | `default` | `default` |
+
+### Database connection
+
+Defined in `config/database.php`:
+
+```php
+'clickhouse' => [
+    'driver' => 'clickhouse',
+    'host' => env('CLICKHOUSE_HOST', '127.0.0.1'),
+    'port' => env('CLICKHOUSE_PORT', 8123),
+    'database' => env('CLICKHOUSE_DATABASE', 'default'),
+    'username' => env('CLICKHOUSE_USERNAME', 'default'),
+    'password' => env('CLICKHOUSE_PASSWORD', ''),
+    'https' => filter_var(env('CLICKHOUSE_HTTPS', false), FILTER_VALIDATE_BOOLEAN),
+    'transport' => env('CLICKHOUSE_TRANSPORT', 'guzzle'),
+    'timeout' => env('CLICKHOUSE_TIMEOUT'),
+    'connect_timeout' => env('CLICKHOUSE_CONNECT_TIMEOUT'),
+    'engine' => env('CLICKHOUSE_ENGINE'),
+    'use_lightweight_delete' => filter_var(
+        env('CLICKHOUSE_USE_LIGHTWEIGHT_DELETE', false),
+        FILTER_VALIDATE_BOOLEAN
+    ),
+],
+```
+
+## Verify the connection
+
+```bash
+php artisan tinker --execute 'DB::connection("clickhouse")->select("SELECT 1");'
+```
+
+Successful response:
+
+```php
+[['1' => 1]]
+```
+
+## Migrations
+
+ClickHouse migrations set `protected $connection = 'clickhouse'` and use the ClickHouse blueprint.
+
+### Run the sample migration
+
+```bash
+php artisan migrate --database=clickhouse \
+  --path=database/migrations/2026_09_24_072944_create_events_table.php
+```
+
+### Example
+
+```php
+use ClickHouse\Laravel\Schema\Blueprint as ClickHouseBlueprint;
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    protected $connection = 'clickhouse';
+
+    public function up(): void
+    {
+        Schema::connection('clickhouse')->create('events', function (ClickHouseBlueprint $table) {
+            $table->unsignedBigInteger('id');
+            $table->unsignedInteger('user_id');
+            $table->text('type');
+            $table->text('name')->nullable();
+            $table->dateTime('created_at');
+
+            $table->engine('MergeTree()');
+            $table->orderBy(['id']);
+            $table->partitionBy('toYYYYMM(created_at)');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::connection('clickhouse')->drop('events');
+    }
+};
+```
+
+| Clause | Purpose |
+|--------|---------|
+| `engine('MergeTree()')` | Standard analytics table engine |
+| `orderBy(['id'])` | Physical sort / primary key on disk |
+| `partitionBy('toYYYYMM(created_at)')` | Split data by month for pruning and cheap drops |
+
+## Usage
+
+### Query builder
+
+```php
+use Illuminate\Support\Facades\DB;
+
+$events = DB::connection('clickhouse')
+    ->table('events')
+    ->where('user_id', 1)
+    ->orderBy('created_at', 'desc')
+    ->limit(10)
+    ->get();
+
+DB::connection('clickhouse')->table('events')->insert([
+    'id' => 2,
+    'user_id' => 1,
+    'type' => 'click',
+    'name' => 'homepage',
+    'created_at' => now()->format('Y-m-d H:i:s'),
+]);
+```
+
+### Eloquent model
+
+Models must extend `ClickHouse\Laravel\Eloquent\Model` (not Laravel’s default Eloquent base).
+
+```php
+namespace App\Models;
+
+use ClickHouse\Laravel\Eloquent\Model;
+
+class Event extends Model
+{
+    protected $connection = 'clickhouse';
+
+    protected $table = 'events';
+
+    protected $guarded = [];
+
+    /** Table has created_at only — no updated_at column. */
+    public const UPDATED_AT = null;
+}
+```
+
+```php
+use App\Models\Event;
+
+Event::create([
+    'id' => 6,
+    'user_id' => 2,
+    'type' => 'click',
+    'name' => 'test',
+    'created_at' => now()->format('Y-m-d H:i:s'),
+]);
+
+$events = Event::where('type', 'click')->get();
+$count  = Event::where('user_id', 1)->count();
+```
+
+> **Tinker tip:** Bare `Event::` resolves to Laravel’s event facade. Use `\App\Models\Event::` or `use App\Models\Event;`.
+
+> **IDs:** ClickHouse does not support auto-increment keys. Provide `id` yourself (UUID, snowflake, sequence, etc.).
+
+### Controller example
+
+```php
+namespace App\Http\Controllers;
+
+use App\Models\Event;
+use Illuminate\Http\JsonResponse;
+
+class EventController extends Controller
+{
+    public function index(): JsonResponse
+    {
+        return response()->json(
+            Event::query()
+                ->orderBy('created_at', 'desc')
+                ->limit(100)
+                ->get()
+        );
+    }
+}
+```
+
+## Partitions
+
+The sample `events` table is partitioned by month (`toYYYYMM(created_at)`).
+
+### List partitions and parts
+
+```sql
+SELECT
+    partition,
+    name,
+    rows,
+    formatReadableSize(bytes_on_disk) AS size
+FROM system.parts
+WHERE database = currentDatabase()
+  AND table = 'events'
+  AND active
+ORDER BY partition;
+```
+
+| Concept | Meaning |
+|---------|---------|
+| **Partition** | Logical month bucket (`202609`, `202610`, …) |
+| **Part** | Physical disk chunk inside a partition (several parts per partition is normal) |
+
+Inserts in the same month share one partition. Background merges combine small parts over time. To force a merge while testing:
+
+```sql
+OPTIMIZE TABLE events FINAL;
+```
+
+### Seed another month (for testing)
+
+```sql
+INSERT INTO events (id, user_id, type, name, created_at) VALUES
+    (100, 1, 'click', 'october-demo-1', '2026-10-01 10:00:00'),
+    (101, 2, 'purchase', 'october-demo-2', '2026-10-15 14:30:00'),
+    (102, 3, 'click', 'october-demo-3', '2026-10-28 09:15:00');
+```
+
+You should then see both `202609` and `202610` in `system.parts`.
+
+## Inspect data in ClickHouse Cloud
+
+1. Open the [ClickHouse Cloud Console](https://console.clickhouse.cloud/)
+2. Select your service (wake it if it was idle)
+3. Open **SQL console**
+4. Run:
+
+```sql
+SHOW TABLES;
+SHOW CREATE TABLE events;
+SELECT * FROM events ORDER BY created_at DESC LIMIT 100;
+```
+
+## Documentation
+
+- [laravel-clickhouse (GitHub)](https://github.com/laravel-clickhouse/laravel-clickhouse)
+- [Installation & configuration](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/installation.md)
+- [Query builder](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/query-builder.md)
+- [Eloquent](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/eloquent.md)
+- [Schema & migrations](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/schema.md)
+- [Parallel queries](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/parallel-queries.md)
+- [ClickHouse documentation](https://clickhouse.com/docs)
