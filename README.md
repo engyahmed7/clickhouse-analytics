@@ -9,49 +9,45 @@ Laravel application that uses **ClickHouse** as a dedicated analytics store alon
 - [Architecture](#architecture)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [Run local ClickHouse](#run-local-clickhouse)
 - [Configuration](#configuration)
-- [Verify the connection](#verify-the-connection)
-- [Migrations](#migrations)
-- [Usage](#usage)
-- [Partitions](#partitions)
-- [Inspect data in ClickHouse Cloud](#inspect-data-in-clickhouse-cloud)
+- [Database setup](#database-setup)
+- [API](#api)
+- [Compare with Telescope](#compare-with-telescope)
+- [Inspect ClickHouse tables](#inspect-clickhouse-tables)
+- [Project structure](#project-structure)
 - [Documentation](#documentation)
 
 ## Features
 
-- ClickHouse Cloud (HTTPS) and self-hosted ClickHouse support
-- Dedicated `clickhouse` database connection (keeps app DB separate)
-- Eloquent models via `ClickHouse\Laravel\Eloquent\Model`
-- Schema builder with `MergeTree`, `ORDER BY`, and `PARTITION BY`
-- Sample `events` table, model, and migration ready to run
-- Parallel-ready HTTP transport (Guzzle)
+- ClickHouse via HTTP (local `:8123` or Cloud HTTPS `:8443`)
+- Same `amazon_reviews` dataset on ClickHouse **and** MySQL
+- Single list API with `source=clickhouse|mysql`
+- Seed large sample data from public S3 Parquet
+- Sync ClickHouse → MySQL for fair local benchmarks
+- Laravel Telescope for request duration inspection
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     subgraph App["Laravel Application"]
-        Controllers["Controllers / Models"]
-        Eloquent["Eloquent / Query Builder"]
+        API["GET /api/v1/amazon-reviews"]
     end
 
-    subgraph OLTP["Application database"]
-        MySQL[("MySQL / SQLite / PostgreSQL<br/>default connection · DB_*")]
+    subgraph Local["This machine"]
+        MySQL[("MySQL<br/>source=mysql")]
+        CH[("ClickHouse<br/>source=clickhouse · :8123")]
     end
 
-    subgraph Analytics["Analytics store"]
-        CH[("ClickHouse Cloud<br/>clickhouse connection · CLICKHOUSE_*")]
-    end
-
-    Controllers --> Eloquent
-    Eloquent -->|"users, sessions, jobs"| MySQL
-    Eloquent -->|"events, metrics · HTTPS :8443"| CH
+    API -->|"product_category filter"| MySQL
+    API -->|"product_category filter"| CH
 ```
 
-| Store | Connection | Use for |
-|-------|------------|---------|
-| MySQL / SQLite / PostgreSQL | `default` (`DB_*`) | Users, sessions, jobs, app state |
-| ClickHouse | `clickhouse` (`CLICKHOUSE_*`) | Events, metrics, analytics |
+| Store | Connection / model | Role |
+|-------|--------------------|------|
+| MySQL | `mysql` · `App\Models\Mysql\AmazonReview` | App DB + mirrored reviews for comparison |
+| ClickHouse | `clickhouse` · `App\Models\AmazonReview` | Analytics store |
 
 ## Requirements
 
@@ -60,7 +56,8 @@ flowchart LR
 | PHP | 8.3+ |
 | Laravel | 13 |
 | Composer | 2.x |
-| ClickHouse | Self-hosted or [ClickHouse Cloud](https://clickhouse.cloud/) |
+| MySQL | Local instance |
+| ClickHouse | Local binary and/or [ClickHouse Cloud](https://clickhouse.cloud/) |
 | Package | [`laravel-clickhouse/laravel-clickhouse`](https://github.com/laravel-clickhouse/laravel-clickhouse) ^1.4 |
 
 ## Installation
@@ -72,30 +69,38 @@ cd clickhouse
 composer install
 cp .env.example .env
 php artisan key:generate
+
+php artisan migrate --database=mysql
 ```
 
-Optional frontend assets:
+## Run local ClickHouse
+
+Install (macOS example):
 
 ```bash
-npm install && npm run build
+curl https://clickhouse.com/ | sh
 ```
 
-The ClickHouse driver is already listed in `composer.json`. To add it to another project:
+Start the server:
 
 ```bash
-composer require laravel-clickhouse/laravel-clickhouse
+mkdir -p ~/clickhouse-data
+cd ~/clickhouse-data
+~/clickhouse server -- --path=$HOME/clickhouse-data
 ```
 
-The package auto-discovers — no service provider registration required.
+Verify:
+
+```bash
+curl 'http://127.0.0.1:8123/?query=SELECT%201'
+# → 1
+```
 
 ## Configuration
 
-### Environment variables
-
-Copy values from your ClickHouse Cloud **HTTPS** connection dialog (not the MySQL protocol tab).
+### Local ClickHouse (recommended for fair MySQL comparison)
 
 ```env
-# Application database
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
@@ -103,272 +108,164 @@ DB_DATABASE=click_house
 DB_USERNAME=root
 DB_PASSWORD=
 
-# ClickHouse (HTTPS interface)
-CLICKHOUSE_HOST=your-service.region.provider.clickhouse.cloud
-CLICKHOUSE_PORT=8443
+MYSQL_DATABASE=click_house
+
+CLICKHOUSE_HOST=127.0.0.1
+CLICKHOUSE_PORT=8123
 CLICKHOUSE_DATABASE=default
 CLICKHOUSE_USERNAME=default
-CLICKHOUSE_PASSWORD=your-password
-CLICKHOUSE_HTTPS=true
+CLICKHOUSE_PASSWORD=
+CLICKHOUSE_HTTPS=false
 CLICKHOUSE_TRANSPORT=guzzle
 CLICKHOUSE_TIMEOUT=30
 CLICKHOUSE_CONNECT_TIMEOUT=10
-CLICKHOUSE_USE_LIGHTWEIGHT_DELETE=false
+
+TELESCOPE_ENABLED=true
+TELESCOPE_DB_CONNECTION=mysql
 ```
 
-| Variable | Description |
-|----------|-------------|
-| `CLICKHOUSE_HOST` | Hostname from the Cloud **HTTPS** dialog |
-| `CLICKHOUSE_PORT` | `8443` (Cloud HTTPS) or `8123` (local HTTP) |
-| `CLICKHOUSE_DATABASE` | Database name (usually `default`) |
-| `CLICKHOUSE_USERNAME` | Native user (usually `default`) |
-| `CLICKHOUSE_PASSWORD` | Service password (shown only at creation — reset if lost) |
-| `CLICKHOUSE_HTTPS` | `true` for TLS / Cloud |
-| `CLICKHOUSE_TRANSPORT` | `guzzle` (default) or `curl` |
-| `CLICKHOUSE_TIMEOUT` | Request timeout in seconds |
-| `CLICKHOUSE_CONNECT_TIMEOUT` | TCP connect timeout in seconds |
+### ClickHouse Cloud
 
-### Local vs Cloud
+```env
+CLICKHOUSE_HOST=your-service.region.provider.clickhouse.cloud
+CLICKHOUSE_PORT=8443
+CLICKHOUSE_USERNAME=default
+CLICKHOUSE_PASSWORD=your-password
+CLICKHOUSE_HTTPS=true
+```
 
-| Setting | Local ClickHouse | ClickHouse Cloud |
-|---------|------------------|------------------|
+| Setting | Local | Cloud |
+|---------|-------|-------|
 | Host | `127.0.0.1` | `*.clickhouse.cloud` |
 | Port | `8123` | `8443` |
 | HTTPS | `false` | `true` |
-| Username | `default` | `default` |
 
-### Database connection
+> Use the **HTTPS** credentials for Cloud — not the MySQL wire-protocol username/port.
 
-Defined in `config/database.php`:
-
-```php
-'clickhouse' => [
-    'driver' => 'clickhouse',
-    'host' => env('CLICKHOUSE_HOST', '127.0.0.1'),
-    'port' => env('CLICKHOUSE_PORT', 8123),
-    'database' => env('CLICKHOUSE_DATABASE', 'default'),
-    'username' => env('CLICKHOUSE_USERNAME', 'default'),
-    'password' => env('CLICKHOUSE_PASSWORD', ''),
-    'https' => filter_var(env('CLICKHOUSE_HTTPS', false), FILTER_VALIDATE_BOOLEAN),
-    'transport' => env('CLICKHOUSE_TRANSPORT', 'guzzle'),
-    'timeout' => env('CLICKHOUSE_TIMEOUT'),
-    'connect_timeout' => env('CLICKHOUSE_CONNECT_TIMEOUT'),
-    'engine' => env('CLICKHOUSE_ENGINE'),
-    'use_lightweight_delete' => filter_var(
-        env('CLICKHOUSE_USE_LIGHTWEIGHT_DELETE', false),
-        FILTER_VALIDATE_BOOLEAN
-    ),
-],
-```
-
-## Verify the connection
+After changing `.env`:
 
 ```bash
-php artisan tinker --execute 'DB::connection("clickhouse")->select("SELECT 1");'
+php artisan config:clear
 ```
 
-Successful response:
+## Database setup
 
-```php
-[['1' => 1]]
-```
-
-## Migrations
-
-ClickHouse migrations set `protected $connection = 'clickhouse'` and use the ClickHouse blueprint.
-
-### Run the sample migration
+### 1. Create ClickHouse table
 
 ```bash
 php artisan migrate --database=clickhouse \
-  --path=database/migrations/2026_09_24_072944_create_events_table.php
+  --path=database/migrations/2026_09_24_091808_create_amazon_reviews_table.php
 ```
 
-### Example
+### 2. Seed sample reviews from S3
 
-```php
-use ClickHouse\Laravel\Schema\Blueprint as ClickHouseBlueprint;
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Support\Facades\Schema;
+```bash
+# Default: 100,000 rows
+php artisan db:seed --class=AmazonReviewSeeder --database=clickhouse
 
-return new class extends Migration
-{
-    protected $connection = 'clickhouse';
-
-    public function up(): void
-    {
-        Schema::connection('clickhouse')->create('events', function (ClickHouseBlueprint $table) {
-            $table->unsignedBigInteger('id');
-            $table->unsignedInteger('user_id');
-            $table->text('type');
-            $table->text('name')->nullable();
-            $table->dateTime('created_at');
-
-            $table->engine('MergeTree()');
-            $table->orderBy(['id']);
-            $table->partitionBy('toYYYYMM(created_at)');
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::connection('clickhouse')->drop('events');
-    }
-};
+# Custom size
+AMAZON_REVIEWS_SEED_LIMIT=500000 php artisan db:seed --class=AmazonReviewSeeder --database=clickhouse
 ```
 
-| Clause | Purpose |
-|--------|---------|
-| `engine('MergeTree()')` | Standard analytics table engine |
-| `orderBy(['id'])` | Physical sort / primary key on disk |
-| `partitionBy('toYYYYMM(created_at)')` | Split data by month for pruning and cheap drops |
+### 3. Create MySQL mirror + sync
 
-## Usage
+```bash
+php artisan migrate --database=mysql \
+  --path=database/migrations/2026_09_24_093646_create_mysql_amazon_reviews_table.php
 
-### Query builder
-
-```php
-use Illuminate\Support\Facades\DB;
-
-$events = DB::connection('clickhouse')
-    ->table('events')
-    ->where('user_id', 1)
-    ->orderBy('created_at', 'desc')
-    ->limit(10)
-    ->get();
-
-DB::connection('clickhouse')->table('events')->insert([
-    'id' => 2,
-    'user_id' => 1,
-    'type' => 'click',
-    'name' => 'homepage',
-    'created_at' => now()->format('Y-m-d H:i:s'),
-]);
+php artisan amazon-reviews:sync-mysql --truncate
 ```
 
-### Eloquent model
+## API
 
-Models must extend `ClickHouse\Laravel\Eloquent\Model` (not Laravel’s default Eloquent base).
+Only one endpoint is exposed:
 
-```php
-namespace App\Models;
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/amazon-reviews` | Return matching Amazon reviews |
 
-use ClickHouse\Laravel\Eloquent\Model;
+### Query parameters
 
-class Event extends Model
-{
-    protected $connection = 'clickhouse';
+| Param | Values | Description |
+|-------|--------|-------------|
+| `source` | `clickhouse` (default) · `mysql` | Which database to read |
+| `product_category` | e.g. `Grocery` | Optional filter |
+| `all` | `1` | Accepted for compatibility (response is always the full matching set) |
 
-    protected $table = 'events';
+### Examples
 
-    protected $guarded = [];
-
-    /** Table has created_at only — no updated_at column. */
-    public const UPDATED_AT = null;
-}
+```bash
+php artisan serve
 ```
 
-```php
-use App\Models\Event;
+```bash
+# ClickHouse
+curl "http://localhost:8000/api/v1/amazon-reviews?all=1&product_category=Grocery&source=clickhouse"
 
-Event::create([
-    'id' => 6,
-    'user_id' => 2,
-    'type' => 'click',
-    'name' => 'test',
-    'created_at' => now()->format('Y-m-d H:i:s'),
-]);
-
-$events = Event::where('type', 'click')->get();
-$count  = Event::where('user_id', 1)->count();
+# MySQL
+curl "http://localhost:8000/api/v1/amazon-reviews?all=1&product_category=Grocery&source=mysql"
 ```
 
-> **Tinker tip:** Bare `Event::` resolves to Laravel’s event facade. Use `\App\Models\Event::` or `use App\Models\Event;`.
+## Compare with Telescope
 
-> **IDs:** ClickHouse does not support auto-increment keys. Provide `id` yourself (UUID, snowflake, sequence, etc.).
-
-### Controller example
-
-```php
-namespace App\Http\Controllers;
-
-use App\Models\Event;
-use Illuminate\Http\JsonResponse;
-
-class EventController extends Controller
-{
-    public function index(): JsonResponse
-    {
-        return response()->json(
-            Event::query()
-                ->orderBy('created_at', 'desc')
-                ->limit(100)
-                ->get()
-        );
-    }
-}
+```bash
+composer require laravel/telescope --dev
+php artisan telescope:install
+php artisan migrate --database=mysql
 ```
 
-## Partitions
+1. Start the app: `php artisan serve`
+2. Open **http://localhost:8000/telescope**
+3. Hit both curl commands above
+4. In **Requests**, compare **Duration** for each call
 
-The sample `events` table is partitioned by month (`toYYYYMM(created_at)`).
+**Duration** = full Laravel request time (DB query + model hydration + JSON), not engine-only time.
 
-### List partitions and parts
+> Tip: comparing **local MySQL** to **ClickHouse Cloud** favors MySQL because of network latency. For a fair test, run ClickHouse locally (`127.0.0.1:8123`).
 
-```sql
-SELECT
-    partition,
-    name,
-    rows,
-    formatReadableSize(bytes_on_disk) AS size
-FROM system.parts
-WHERE database = currentDatabase()
-  AND table = 'events'
-  AND active
-ORDER BY partition;
+## Inspect ClickHouse tables
+
+```bash
+~/clickhouse client
 ```
-
-| Concept | Meaning |
-|---------|---------|
-| **Partition** | Logical month bucket (`202609`, `202610`, …) |
-| **Part** | Physical disk chunk inside a partition (several parts per partition is normal) |
-
-Inserts in the same month share one partition. Background merges combine small parts over time. To force a merge while testing:
-
-```sql
-OPTIMIZE TABLE events FINAL;
-```
-
-### Seed another month (for testing)
-
-```sql
-INSERT INTO events (id, user_id, type, name, created_at) VALUES
-    (100, 1, 'click', 'october-demo-1', '2026-10-01 10:00:00'),
-    (101, 2, 'purchase', 'october-demo-2', '2026-10-15 14:30:00'),
-    (102, 3, 'click', 'october-demo-3', '2026-10-28 09:15:00');
-```
-
-You should then see both `202609` and `202610` in `system.parts`.
-
-## Inspect data in ClickHouse Cloud
-
-1. Open the [ClickHouse Cloud Console](https://console.clickhouse.cloud/)
-2. Select your service (wake it if it was idle)
-3. Open **SQL console**
-4. Run:
 
 ```sql
 SHOW TABLES;
-SHOW CREATE TABLE events;
-SELECT * FROM events ORDER BY created_at DESC LIMIT 100;
+SELECT count() FROM amazon_reviews;
+SELECT * FROM amazon_reviews WHERE product_category = 'Grocery' LIMIT 10;
 ```
+
+Or via HTTP:
+
+```bash
+curl 'http://127.0.0.1:8123/?query=SHOW%20TABLES'
+```
+
+Partitions / parts:
+
+```sql
+SELECT partition, name, rows
+FROM system.parts
+WHERE table = 'amazon_reviews' AND active
+ORDER BY partition;
+```
+
+## Project structure
+
+| Path | Purpose |
+|------|---------|
+| `config/database.php` | `clickhouse` + `mysql` connections |
+| `app/Models/AmazonReview.php` | ClickHouse Eloquent model |
+| `app/Models/Mysql/AmazonReview.php` | MySQL Eloquent model |
+| `app/Http/Controllers/Api/V1/AmazonReviewController.php` | List API |
+| `database/migrations/2026_09_24_091808_create_amazon_reviews_table.php` | ClickHouse `MergeTree` table |
+| `database/migrations/2026_09_24_093646_create_mysql_amazon_reviews_table.php` | MySQL mirror table |
+| `database/seeders/AmazonReviewSeeder.php` | Load Parquet from S3 into ClickHouse |
+| `app/Console/Commands/SyncAmazonReviewsToMysqlCommand.php` | Sync CH → MySQL |
 
 ## Documentation
 
-- [laravel-clickhouse (GitHub)](https://github.com/laravel-clickhouse/laravel-clickhouse)
-- [Installation & configuration](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/installation.md)
-- [Query builder](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/query-builder.md)
-- [Eloquent](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/eloquent.md)
-- [Schema & migrations](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/schema.md)
-- [Parallel queries](https://github.com/laravel-clickhouse/laravel-clickhouse/blob/master/docs/docs/parallel-queries.md)
-- [ClickHouse documentation](https://clickhouse.com/docs)
+- [laravel-clickhouse](https://github.com/laravel-clickhouse/laravel-clickhouse)
+- [Amazon reviews dataset](https://clickhouse.com/docs/getting-started/example-datasets/amazon-reviews)
+- [Laravel Telescope](https://laravel.com/docs/telescope)
+- [ClickHouse docs](https://clickhouse.com/docs)
