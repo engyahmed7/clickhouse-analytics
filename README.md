@@ -98,7 +98,7 @@ curl 'http://127.0.0.1:8123/?query=SELECT%201'
 
 ## Configuration
 
-### Local ClickHouse (recommended for fair MySQL comparison)
+### Local ClickHouse
 
 ```env
 DB_CONNECTION=mysql
@@ -221,7 +221,6 @@ php artisan migrate --database=mysql
 
 **Duration** = full Laravel request time (DB query + model hydration + JSON), not engine-only time.
 
-> Tip: comparing **local MySQL** to **ClickHouse Cloud** favors MySQL because of network latency. For a fair test, run ClickHouse locally (`127.0.0.1:8123`).
 
 ## Inspect ClickHouse tables
 
