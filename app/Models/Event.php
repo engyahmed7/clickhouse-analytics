@@ -11,4 +11,6 @@ class Event extends Model
     protected $table = 'events';
 
     protected $guarded = [];
+
+    public const UPDATED_AT = null;
 }
