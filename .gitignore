@@ -6,6 +6,11 @@
 .phpactor.json
 .phpunit.result.cache
 /.codex
+.cursor/
+.claude/
+.vscode/
+/.claude/
+/.vscode/
 /.cursor/
 /.idea
 /.nova
