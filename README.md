@@ -62,7 +62,7 @@ flowchart LR
 ## Installation
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/engyahmed7/clickhouse-analytics.git
 cd clickhouse
 
 composer install
