@@ -201,9 +201,25 @@ php artisan serve
 
 | Param | Values | Description |
 |-------|--------|-------------|
-| `source` | `clickhouse` (default) · `mysql` | Which database to read |
+| `source` | Keys from `config/analytics.php` (default: `ANALYTICS_DEFAULT_SOURCE`) | Which analytics store to read |
 | `product_category` | e.g. `Grocery` | Optional filter |
 | `all` | `1` | Accepted for compatibility (response is always the full matching set) |
+
+### Analytics source factory
+
+Sources are registered in `config/analytics.php` and resolved by `App\Analytics\AnalyticsSourceManager` (Factory pattern). 
+
+| File | Role |
+|------|------|
+| `config/analytics.php` | Source registry (`clickhouse`, `mysql`, …) |
+| `App\Analytics\Contracts\AnalyticsSourceFactory` | Factory contract |
+| `App\Analytics\AnalyticsSourceManager` | Resolves `source` → Eloquent model |
+
+**Add a new warehouse later:**
+
+1. Add a connection in `config/database.php`
+2. Create a model with `protected $connection = '…'`
+3. Register it under `analytics.sources` — API validation and resolution pick it up automatically
 
 ### Examples
 
@@ -266,7 +282,9 @@ ORDER BY partition;
 
 | Path | Purpose |
 |------|---------|
-| `config/database.php` | `clickhouse` + `mysql` connections |
+| `config/database.php` | Physical DB connections (`mysql`, `clickhouse`) |
+| `config/analytics.php` | Named analytics sources registry (Factory) |
+| `app/Analytics/AnalyticsSourceManager.php` | Resolves `?source=` → model class |
 | `app/Models/AmazonReview.php` | ClickHouse Eloquent model |
 | `app/Models/Mysql/AmazonReview.php` | MySQL Eloquent model |
 | `app/Http/Controllers/Api/V1/AmazonReviewController.php` | List API |

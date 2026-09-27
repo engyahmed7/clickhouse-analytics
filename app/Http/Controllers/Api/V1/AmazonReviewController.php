@@ -2,39 +2,33 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Analytics\Contracts\AnalyticsSourceFactory;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\ListAmazonReviewsRequest;
 use App\Http\Resources\Api\V1\AmazonReviewResource;
-use App\Models\AmazonReview as ClickHouseAmazonReview;
-use App\Models\Mysql\AmazonReview as MysqlAmazonReview;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 class AmazonReviewController extends Controller
 {
+    public function __construct(
+        private AnalyticsSourceFactory $analyticsSources,
+    ) {}
+
     public function index(ListAmazonReviewsRequest $request): AnonymousResourceCollection
     {
         $filters = $request->validated();
+        $source = $filters['source'] ?? $this->analyticsSources->default();
 
         ini_set('memory_limit', '512M');
 
-        $reviews = $this->filteredReviews(
-            $this->modelFor($filters['source'] ?? 'clickhouse'),
-            $filters
-        )->get();
+        /** @var class-string<Model> $modelClass */
+        $modelClass = $this->analyticsSources->make($source);
+
+        $reviews = $this->filteredReviews($modelClass, $filters)->get();
 
         return AmazonReviewResource::collection($reviews);
-    }
-
-    /**
-     * @return class-string<Model>
-     */
-    private function modelFor(string $source): string
-    {
-        return $source === 'mysql'
-            ? MysqlAmazonReview::class
-            : ClickHouseAmazonReview::class;
     }
 
     /**
