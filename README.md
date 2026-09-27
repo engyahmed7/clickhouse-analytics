@@ -15,7 +15,6 @@ Laravel application that uses **ClickHouse** as a dedicated analytics store alon
 - [API](#api)
 - [Compare with Telescope](#compare-with-telescope)
 - [Inspect ClickHouse tables](#inspect-clickhouse-tables)
-- [Project structure](#project-structure)
 - [Documentation](#documentation)
 
 ## Features
@@ -277,21 +276,6 @@ FROM system.parts
 WHERE table = 'amazon_reviews' AND active
 ORDER BY partition;
 ```
-
-## Project structure
-
-| Path | Purpose |
-|------|---------|
-| `config/database.php` | Physical DB connections (`mysql`, `clickhouse`) |
-| `config/analytics.php` | Named analytics sources registry (Factory) |
-| `app/Analytics/AnalyticsSourceManager.php` | Resolves `?source=` → model class |
-| `app/Models/AmazonReview.php` | ClickHouse Eloquent model |
-| `app/Models/Mysql/AmazonReview.php` | MySQL Eloquent model |
-| `app/Http/Controllers/Api/V1/AmazonReviewController.php` | List API |
-| `database/migrations/2026_09_24_091808_create_amazon_reviews_table.php` | ClickHouse `MergeTree` table |
-| `database/migrations/2026_09_24_093646_create_mysql_amazon_reviews_table.php` | MySQL mirror table |
-| `database/seeders/AmazonReviewSeeder.php` | Load Parquet from S3 into ClickHouse |
-| `app/Console/Commands/SyncAmazonReviewsToMysqlCommand.php` | Sync CH → MySQL |
 
 ## Documentation
 
